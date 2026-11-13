@@ -23,24 +23,60 @@ public struct KtenEncoder {
   /// This form is useful when mapping typed application values to an existing
   /// structured store without passing through bytes.
   public func encodeValue<T: Encodable>(_ value: T) throws -> KtenValue {
-    let encoder = _KtenEncoder(codingPath: [], userInfo: [:])
-    try value.encode(to: encoder)
-    return encoder.box.value
+    try _KtenEncoder.encoded(value, codingPath: [], userInfo: [:])
   }
 }
 
 private final class _KtenValueBox {
   var onChange: ((KtenValue) -> Void)?
-  var value: KtenValue = .null {
-    didSet { onChange?(value) }
+  private var storage: KtenValue = .null
+
+  /// The value so far; setting it tells the parent container.
+  var value: KtenValue {
+    get { storage }
+    set {
+      storage = newValue
+      onChange?(newValue)
+    }
   }
 
   init(onChange: ((KtenValue) -> Void)? = nil) {
     self.onChange = onChange
   }
+
+  /// Changes the array held here in place. The box lets go of it first so
+  /// the array is uniquely referenced and appending does not copy it.
+  func mutateArray(_ body: (inout [KtenValue]) -> Void) {
+    guard case .array(var values) = storage else { return }
+    storage = .null
+    body(&values)
+    value = .array(values)
+  }
+
+  /// Changes the object held here in place, without copying its fields.
+  func mutateObject(_ body: (inout [String: KtenValue]) -> Void) {
+    guard case .object(var fields) = storage else { return }
+    storage = .null
+    body(&fields)
+    value = .object(fields)
+  }
 }
 
 private struct _KtenEncoder: Encoder {
+  /// Encodes one value as a child of `codingPath`. Bytes (`Data` and
+  /// `[UInt8]`) become one `bytes` value rather than an array with a value
+  /// per byte, which would take minutes and a great deal of memory for a
+  /// file of a few megabytes.
+  static func encoded<T: Encodable>(
+    _ value: T, codingPath: [any CodingKey], userInfo: [CodingUserInfoKey: Any]
+  ) throws -> KtenValue {
+    if let data = value as? Data { return .bytes(Array(data)) }
+    if let bytes = value as? [UInt8] { return .bytes(bytes) }
+    let encoder = _KtenEncoder(codingPath: codingPath, userInfo: userInfo)
+    try value.encode(to: encoder)
+    return encoder.box.value
+  }
+
   let box: _KtenValueBox
   var codingPath: [any CodingKey]
   var userInfo: [CodingUserInfoKey: Any]
@@ -82,9 +118,7 @@ private struct _KtenKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContain
   }
 
   mutating func encode<T: Encodable>(_ value: T, forKey key: Key) throws {
-    let child = _KtenEncoder(codingPath: codingPath + [key], userInfo: userInfo)
-    try value.encode(to: child)
-    set(child.box.value, forKey: key)
+    set(try _KtenEncoder.encoded(value, codingPath: codingPath + [key], userInfo: userInfo), forKey: key)
   }
 
   mutating func nestedContainer<NestedKey: CodingKey>(
@@ -145,9 +179,7 @@ private struct _KtenKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContain
   }
 
   private static func replace(_ value: KtenValue, in box: _KtenValueBox, at key: String) {
-    guard case .object(var fields) = box.value else { return }
-    fields[key] = value
-    box.value = .object(fields)
+    box.mutateObject { $0[key] = value }
   }
 }
 
@@ -165,12 +197,7 @@ private struct _KtenUnkeyedEncodingContainer: UnkeyedEncodingContainer {
 
   mutating func encode<T: Encodable>(_ value: T) throws {
     let index = count
-    let child = _KtenEncoder(
-      codingPath: codingPath + [_KtenIndexCodingKey(index)],
-      userInfo: userInfo
-    )
-    try value.encode(to: child)
-    append(child.box.value)
+    append(try _KtenEncoder.encoded(value, codingPath: codingPath + [_KtenIndexCodingKey(index)], userInfo: userInfo))
   }
 
   mutating func nestedContainer<NestedKey: CodingKey>(
@@ -222,15 +249,14 @@ private struct _KtenUnkeyedEncodingContainer: UnkeyedEncodingContainer {
   }
 
   private mutating func append(_ value: KtenValue) {
-    guard case .array(var values) = box.value else { return }
-    values.append(value)
-    box.value = .array(values)
+    box.mutateArray { $0.append(value) }
   }
 
   private static func replace(_ value: KtenValue, in box: _KtenValueBox, at index: Int) {
-    guard case .array(var values) = box.value, values.indices.contains(index) else { return }
-    values[index] = value
-    box.value = .array(values)
+    box.mutateArray { values in
+      guard values.indices.contains(index) else { return }
+      values[index] = value
+    }
   }
 }
 
@@ -255,9 +281,7 @@ private struct _KtenSingleValueEncodingContainer: SingleValueEncodingContainer {
   mutating func encode(_ value: UInt64) throws { box.value = .unsigned(value) }
 
   mutating func encode<T: Encodable>(_ value: T) throws {
-    let child = _KtenEncoder(codingPath: codingPath, userInfo: [:])
-    try value.encode(to: child)
-    box.value = child.box.value
+    box.value = try _KtenEncoder.encoded(value, codingPath: codingPath, userInfo: [:])
   }
 }
 

@@ -28,7 +28,7 @@ public struct KtenDecoder {
   /// - Returns: A decoded value.
   /// - Throws: A decoding error when the value does not fit the requested type.
   public func decode<T: Decodable>(_ type: T.Type, from value: KtenValue) throws -> T {
-    try T(from: _KtenDecoder(value: value, codingPath: [], userInfo: [:]))
+    try _KtenDecoder(value: value, codingPath: [], userInfo: [:]).decoded(type)
   }
 }
 
@@ -51,6 +51,17 @@ private struct _KtenDecoder: Decoder {
 
   func singleValueContainer() throws -> any SingleValueDecodingContainer {
     _KtenSingleValueDecodingContainer(decoder: self, codingPath: codingPath)
+  }
+
+  /// Decodes `type` from this decoder's value. Bytes read straight from a
+  /// `bytes` value; documents that stored them as an array of numbers still
+  /// decode through the type's own `init(from:)`.
+  func decoded<T: Decodable>(_ type: T.Type) throws -> T {
+    if case .bytes(let bytes) = value {
+      if T.self == Data.self, let data = Data(bytes) as? T { return data }
+      if T.self == [UInt8].self, let array = bytes as? T { return array }
+    }
+    return try T(from: self)
   }
 
   func child(_ value: KtenValue, for key: any CodingKey) -> _KtenDecoder {
@@ -85,7 +96,7 @@ private struct _KtenKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContain
   }
 
   func decode<T: Decodable>(_ type: T.Type, forKey key: Key) throws -> T {
-    try T(from: decoder.child(try require(key), for: key))
+    try decoder.child(try require(key), for: key).decoded(type)
   }
 
   func nestedContainer<NestedKey: CodingKey>(
@@ -141,7 +152,7 @@ private struct _KtenUnkeyedDecodingContainer: UnkeyedDecodingContainer {
 
   mutating func decode<T: Decodable>(_ type: T.Type) throws -> T {
     let (value, key) = try next()
-    return try T(from: decoder.child(value, for: key))
+    return try decoder.child(value, for: key).decoded(type)
   }
 
   mutating func nestedContainer<NestedKey: CodingKey>(
@@ -179,7 +190,7 @@ private struct _KtenSingleValueDecodingContainer: SingleValueDecodingContainer {
   }
 
   func decode<T: Decodable>(_ type: T.Type) throws -> T {
-    try T(from: decoder)
+    try decoder.decoded(type)
   }
 
   func decode(_ type: Bool.Type) throws -> Bool {
