@@ -27,6 +27,16 @@ struct BytesEncodingTests {
     #expect(try KtenDecoder().decode(File.self, from: stored) == File(name: "a", data: Data([1, 2]), raw: [3]))
   }
 
+  @Test func emptyArraysStayArrays() throws {
+    struct Lists: Codable, Equatable {
+      var names: [String]
+      var counts: [Int]
+    }
+    let lists = Lists(names: [], counts: [])
+    #expect(try KtenEncoder().encodeValue(lists) == .object(["names": .array([]), "counts": .array([])]))
+    #expect(try KtenDecoder().decode(Lists.self, from: KtenEncoder().encode(lists)) == lists)
+  }
+
   @Test func aFewMegabytesEncodeQuickly() throws {
     let file = File(name: "photo", data: Data(repeating: 7, count: 8 << 20), raw: [])
     let start = ContinuousClock.now

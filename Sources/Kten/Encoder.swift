@@ -70,8 +70,10 @@ private struct _KtenEncoder: Encoder {
   static func encoded<T: Encodable>(
     _ value: T, codingPath: [any CodingKey], userInfo: [CodingUserInfoKey: Any]
   ) throws -> KtenValue {
-    if let data = value as? Data { return .bytes(Array(data)) }
-    if let bytes = value as? [UInt8] { return .bytes(bytes) }
+    // By type, not by cast: `as? [UInt8]` succeeds on an empty array of any
+    // element type, which wrote every empty array as bytes.
+    if T.self == Data.self, let data = value as? Data { return .bytes(Array(data)) }
+    if T.self == [UInt8].self, let bytes = value as? [UInt8] { return .bytes(bytes) }
     let encoder = _KtenEncoder(codingPath: codingPath, userInfo: userInfo)
     try value.encode(to: encoder)
     return encoder.box.value
