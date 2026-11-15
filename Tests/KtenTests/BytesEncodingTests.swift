@@ -37,6 +37,44 @@ struct BytesEncodingTests {
     #expect(try KtenDecoder().decode(Lists.self, from: KtenEncoder().encode(lists)) == lists)
   }
 
+  @Test func emptyArraysStoredAsEmptyBytesStillDecode() throws {
+    struct Lists: Codable, Equatable {
+      var names: [String]
+      var counts: [Int]
+    }
+    let stored = KtenValue.object(["names": .bytes([]), "counts": .bytes([])])
+    #expect(try KtenDecoder().decode(Lists.self, from: stored) == Lists(names: [], counts: []))
+  }
+
+  /// A value that finds its kind by trying one type after another, as the AI
+  /// SDK's `JSONValue` does: a mismatch must be Codable's own error.
+  private enum Probed: Codable, Equatable {
+    case bool(Bool)
+    case number(Double)
+    case text(String)
+
+    init(from decoder: any Decoder) throws {
+      let container = try decoder.singleValueContainer()
+      do { self = .bool(try container.decode(Bool.self)); return } catch DecodingError.typeMismatch {}
+      do { self = .number(try container.decode(Double.self)); return } catch DecodingError.typeMismatch {}
+      self = .text(try container.decode(String.self))
+    }
+
+    func encode(to encoder: any Encoder) throws {
+      var container = encoder.singleValueContainer()
+      switch self {
+      case .bool(let value): try container.encode(value)
+      case .number(let value): try container.encode(value)
+      case .text(let value): try container.encode(value)
+      }
+    }
+  }
+
+  @Test func probingDecodersSeeTypeMismatches() throws {
+    let values: [Probed] = [.bool(true), .number(2.5), .text("x")]
+    #expect(try KtenDecoder().decode([Probed].self, from: KtenEncoder().encode(values)) == values)
+  }
+
   @Test func aFewMegabytesEncodeQuickly() throws {
     let file = File(name: "photo", data: Data(repeating: 7, count: 8 << 20), raw: [])
     let start = ContinuousClock.now

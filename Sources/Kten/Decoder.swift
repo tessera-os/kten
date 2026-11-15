@@ -45,7 +45,16 @@ private struct _KtenDecoder: Decoder {
   }
 
   func unkeyedContainer() throws -> any UnkeyedDecodingContainer {
-    guard case .array = value else { throw mismatch(expected: "array") }
+    switch value {
+    case .array:
+      break
+    case .bytes(let bytes) where bytes.isEmpty:
+      // Encoders before empty arrays were encoded by type wrote every empty
+      // array as empty bytes; documents stored then still decode as empty.
+      break
+    default:
+      throw mismatch(expected: "array")
+    }
     return _KtenUnkeyedDecodingContainer(decoder: self, codingPath: codingPath)
   }
 
@@ -68,8 +77,14 @@ private struct _KtenDecoder: Decoder {
     _KtenDecoder(value: value, codingPath: codingPath + [key], userInfo: userInfo)
   }
 
-  func mismatch(expected: String) -> KtenError {
-    KtenError.typeMismatch(expected: expected, actual: value.typeName)
+  /// A type mismatch, reported as Codable's `DecodingError.typeMismatch` so
+  /// a type that probes for its value's kind (decoding one type after
+  /// another) can tell "not this one" from a broken document.
+  func mismatch(expected: String, _ type: Any.Type = Void.self) -> DecodingError {
+    DecodingError.typeMismatch(
+      type,
+      DecodingError.Context(
+        codingPath: codingPath, debugDescription: "Expected \(expected), found \(value.typeName)."))
   }
 }
 
